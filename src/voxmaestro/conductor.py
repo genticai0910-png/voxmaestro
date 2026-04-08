@@ -800,6 +800,51 @@ class VoxMaestro:
         return result
 
     # ------------------------------------------------------------------
+    # Transcript replay
+    # ------------------------------------------------------------------
+
+    async def transcript_replay(
+        self,
+        turns: list[str],
+        call_id: Optional[str] = None,
+        pre_classified_intents: Optional[list[str]] = None,
+    ) -> dict:
+        """
+        Replay a list of user utterance strings through the state machine.
+        Returns dict with state_path, intents, final_state, phase, turn_results.
+        """
+        ctx = self.create_context(call_id=call_id)
+        state_path = [ctx.current_state]
+        intent_path: list[Optional[str]] = []
+        turn_results = []
+
+        for i, text in enumerate(turns):
+            if ctx.phase.value != "active":
+                break
+            pre = (
+                pre_classified_intents[i]
+                if pre_classified_intents and i < len(pre_classified_intents)
+                else None
+            )
+            result = await self.process_turn(ctx, text, pre_classified_intent=pre)
+            intent_path.append(result.get("intent"))
+            state_path.append(ctx.current_state)
+            turn_results.append(result)
+
+        return {
+            "call_id": ctx.call_id,
+            "state_path": state_path,
+            "intents": intent_path,
+            "final_state": ctx.current_state,
+            "phase": ctx.phase.value,
+            "turn_results": turn_results,
+            "transcript": [
+                {"role": t.role, "text": t.text, "intent": t.intent}
+                for t in ctx.transcript
+            ],
+        }
+
+    # ------------------------------------------------------------------
     # Convenience
     # ------------------------------------------------------------------
 

@@ -5,6 +5,15 @@ from .conductor import (
     ConversationPhase,
     ToolBridge,
 )
+from .integrations.bland import BlandTranscriptAdapter, CallAnalysis, qualification_score
 
-__all__ = ["VoxMaestro", "ConversationContext", "ConversationPhase", "ToolBridge"]
+__all__ = [
+    "VoxMaestro",
+    "ConversationContext",
+    "ConversationPhase",
+    "ToolBridge",
+    "BlandTranscriptAdapter",
+    "CallAnalysis",
+    "qualification_score",
+]
 __version__ = "0.1.0"
