@@ -157,6 +157,11 @@ class BlandTranscriptAdapter:
         raw_transcript = bland_payload.get("transcript", [])
         transcript_turns = len(raw_transcript) if isinstance(raw_transcript, list) else 0
 
+        # Store turn texts in metadata so TrainingHarvester.record_replay() can pick them up
+        ctx_metadata: dict = {}
+        for i, text in enumerate(user_turns):
+            ctx_metadata[f"turn_{i}_text"] = text
+
         errors: list[str] = []
 
         # Bootstrap replay using conductor's transcript_replay method
@@ -186,6 +191,7 @@ class BlandTranscriptAdapter:
                 handoff_reason=None,
                 transcript_turns=transcript_turns,
                 duration_seconds=duration,
+                metadata=ctx_metadata,
                 errors=errors,
             )
 
@@ -224,6 +230,7 @@ class BlandTranscriptAdapter:
             handoff_reason=handoff_reason,
             transcript_turns=transcript_turns,
             duration_seconds=duration,
+            metadata=ctx_metadata,
             errors=errors,
         )
 
