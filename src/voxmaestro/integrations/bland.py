@@ -5,17 +5,21 @@ Provides post-call transcript replay: takes Bland's post-call webhook payload,
 parses the transcript into turns, replays them through a VoxMaestro conductor,
 and returns a structured call analysis result.
 
+Also provides BlandLiveTurnHandler for real-time mid-call context injection.
+
 Architecture: Bland → post-call webhook → BlandTranscriptAdapter.replay() → CallAnalysis
+             Bland → live-turn tool webhook → BlandLiveTurnHandler.handle() → {"response": "..."}
 """
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from ..conductor import VoxMaestro
+    from ..conductor import VoxMaestro, ConversationContext
 
 logger = logging.getLogger(__name__)
 
@@ -222,3 +226,118 @@ class BlandTranscriptAdapter:
             duration_seconds=duration,
             errors=errors,
         )
+
+
+# ---------------------------------------------------------------------------
+# Live-turn handler (real-time mid-call context injection)
+# ---------------------------------------------------------------------------
+
+class BlandLiveTurnHandler:
+    """
+    Handles Bland AI real-time tool webhook calls.
+
+    Bland calls this endpoint mid-call via a custom tool defined in the call payload.
+    We route the latest transcript turn through VoxMaestro and return context injection.
+
+    Endpoint shape (what Bland POSTs):
+        {"call_id": "...", "transcript": [...], "variables": {}, "now": "..."}
+
+    Response shape (what Bland expects):
+        {"response": "context text to inject into agent's awareness"}
+
+    State is per-call (stored in _sessions dict keyed by call_id).
+    Sessions auto-expire after 30 minutes of inactivity.
+    """
+
+    SESSION_TTL = 1800  # 30 minutes
+
+    def __init__(self, conductor: "VoxMaestro"):
+        self._conductor = conductor
+        self._sessions: dict = {}  # call_id → {ctx, last_active}
+
+    def _get_or_create_session(self, call_id: str) -> "ConversationContext":
+        """Get existing session or create new one."""
+        now = time.time()
+        # Expire stale sessions
+        expired = [k for k, v in self._sessions.items() if now - v["last_active"] > self.SESSION_TTL]
+        for k in expired:
+            del self._sessions[k]
+
+        if call_id not in self._sessions:
+            ctx = self._conductor.create_context(call_id=call_id)
+            self._sessions[call_id] = {"ctx": ctx, "last_active": now}
+        else:
+            self._sessions[call_id]["last_active"] = now
+
+        return self._sessions[call_id]["ctx"]
+
+    def end_session(self, call_id: str) -> None:
+        """Remove session (call ended)."""
+        self._sessions.pop(call_id, None)
+
+    async def handle(self, bland_payload: dict) -> dict:
+        """
+        Process a Bland live-turn tool webhook.
+        Returns {"response": "..."} for Bland to inject.
+        """
+        call_id = bland_payload.get("call_id", str(uuid.uuid4()))
+        transcript = bland_payload.get("transcript", [])
+
+        # Extract only the latest user utterance
+        user_turns = [t for t in transcript if isinstance(t, dict) and t.get("role") == "user"]
+        if not user_turns:
+            return {"response": ""}
+
+        latest_text = user_turns[-1].get("text", "").strip()
+        if not latest_text:
+            return {"response": ""}
+
+        ctx = self._get_or_create_session(call_id)
+
+        try:
+            result = await self._conductor.process_turn(ctx, latest_text)
+
+            # Build context injection based on current state
+            state = ctx.current_state
+            intent = result.get("intent", "")
+
+            # Build a concise directive for Bland's agent
+            directives = []
+
+            if result.get("handoff"):
+                directives.append("TRANSFER NOW: Customer has requested to speak with a human agent.")
+            elif ctx.phase.value != "active":
+                directives.append(f"Call phase: {ctx.phase.value}. Wrap up gracefully.")
+            else:
+                # State-specific guidance
+                state_guidance = {
+                    "qualification": "Focus on uncovering motivation and timeline. Ask about property condition.",
+                    "pricing_discussion": "Probe for asking price. Explain as-is purchase process.",
+                    "offer_preparation": "Tell customer you're pulling comparable sales. Keep them engaged.",
+                    "negotiation": "Empathize with price concerns. Anchor to as-is value.",
+                    "closing": "Collect contact info. Confirm next steps clearly.",
+                    "objection_handling": "Acknowledge concern, pivot to value proposition.",
+                }
+                if state in state_guidance:
+                    directives.append(state_guidance[state])
+
+                if intent == "motivated_seller":
+                    directives.append("HIGH MOTIVATION DETECTED: Prioritize closing the appointment now.")
+                elif intent == "needs_time":
+                    directives.append("Customer needs time. Offer a specific callback time.")
+
+            response_text = " | ".join(directives) if directives else ""
+
+            return {
+                "response": response_text,
+                "_vox_meta": {  # Extra metadata (Bland ignores unknown fields)
+                    "state": state,
+                    "intent": intent,
+                    "phase": ctx.phase.value,
+                    "turn": ctx.turn_count,
+                }
+            }
+
+        except Exception as e:
+            logger.error("BlandLiveTurnHandler error: %s", e)
+            return {"response": ""}

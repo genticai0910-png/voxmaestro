@@ -304,6 +304,55 @@ class IntentClassifier:
                 resp.raise_for_status()
                 data = resp.json()
                 raw = data.get("message", {}).get("content", "").strip().lower()
+
+                latency = time.time() - t0
+                logger.debug("Intent classified as '%s' in %.3fs", raw, latency)
+
+                # Match against valid intents (fuzzy: case-insensitive substring)
+                for intent in valid_intents:
+                    if intent.lower() in raw:
+                        return intent
+
+                logger.debug("Intent '%s' not in valid list, using fallback", raw)
+                return fallback
+
+            elif provider == "dealiq-ce":
+                # CE model: dealiq-ce-v4b-mlx — Conversational Extraction
+                # Prompts for structured intent extraction with RE-specific slots
+                ce_prompt = (
+                    f"You are analyzing a real estate seller conversation.\n"
+                    f"Classify the seller's intent from: {intents_list}\n\n"
+                    f"Utterance: {text}\n\n"
+                    f"Respond with JSON only: {{\"intent\": \"...\", \"confidence\": 0.0-1.0}}"
+                )
+                resp = await client.post(
+                    f"{endpoint}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": ce_prompt}],
+                        "stream": False,
+                    },
+                    timeout=self._cfg.get("timeout", 5.0),
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                raw = data.get("message", {}).get("content", "").strip()
+                # Parse JSON from response
+                import json as _json
+                try:
+                    start = raw.find("{")
+                    end = raw.rfind("}") + 1
+                    if start >= 0 and end > start:
+                        parsed = _json.loads(raw[start:end])
+                        classified = parsed.get("intent", "").lower()
+                        # Match to valid intents
+                        for intent in valid_intents:
+                            if intent.lower() == classified or intent.lower() in classified:
+                                return intent
+                except Exception:
+                    pass
+                return fallback
+
             else:
                 # OpenAI-compatible
                 resp = await client.post(
@@ -319,16 +368,16 @@ class IntentClassifier:
                 data = resp.json()
                 raw = data["choices"][0]["message"]["content"].strip().lower()
 
-            latency = time.time() - t0
-            logger.debug("Intent classified as '%s' in %.3fs", raw, latency)
+                latency = time.time() - t0
+                logger.debug("Intent classified as '%s' in %.3fs", raw, latency)
 
-            # Match against valid intents (fuzzy: first token, case-insensitive)
-            for intent in valid_intents:
-                if intent.lower() in raw:
-                    return intent
+                # Match against valid intents (fuzzy: case-insensitive substring)
+                for intent in valid_intents:
+                    if intent.lower() in raw:
+                        return intent
 
-            logger.debug("Intent '%s' not in valid list, using fallback", raw)
-            return fallback
+                logger.debug("Intent '%s' not in valid list, using fallback", raw)
+                return fallback
 
         except Exception as e:
             logger.warning("Intent classification failed: %s — using fallback", e)
