@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 langfuse = ["langfuse>=2.0"]
 pipecat = ["pipecat-ai>=0.0.30"]
+server = ["fastapi>=0.110", "uvicorn>=0.29"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

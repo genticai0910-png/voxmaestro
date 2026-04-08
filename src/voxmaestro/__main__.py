@@ -210,6 +210,25 @@ async def cmd_diagram(args):
         print(content)
 
 
+def cmd_serve(args):
+    try:
+        import uvicorn
+    except ImportError:
+        print("ERROR: uvicorn not installed. Run: pip install 'voxmaestro[server]'", file=sys.stderr)
+        sys.exit(1)
+    if args.yaml:
+        os.environ.setdefault("VOX_AGENT_YAML", args.yaml)
+    if args.port:
+        os.environ.setdefault("VOX_PORT", str(args.port))
+    uvicorn.run(
+        "voxmaestro.server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level="info",
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(prog="voxmaestro", description="VoxMaestro CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -232,6 +251,12 @@ def main():
     p_diagram.add_argument("--output", default="", help="Write output to this file instead of stdout")
     p_diagram.add_argument("--html", action="store_true", help="Output full HTML page instead of Mermaid markup")
 
+    p_serve = sub.add_parser("serve", help="Start VoxMaestro HTTP server")
+    p_serve.add_argument("--port", type=int, default=8850)
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--yaml", default="")
+    p_serve.add_argument("--reload", action="store_true", help="Hot reload (dev only)")
+
     args = parser.parse_args()
 
     if args.command == "replay":
@@ -242,6 +267,8 @@ def main():
         asyncio.run(cmd_stats(args))
     elif args.command == "diagram":
         asyncio.run(cmd_diagram(args))
+    elif args.command == "serve":
+        cmd_serve(args)
 
 
 if __name__ == "__main__":

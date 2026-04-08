@@ -6,9 +6,9 @@ agent:
   default_language: "en-US"
 
 intent:
-  provider: "ollama"
-  endpoint: "${VSAI_ENDPOINT}"          # e.g. http://100.122.223.120:11435
-  model: "vsai-intent-v6"
+  provider: "dealiq-ce"
+  endpoint: "${VOX_CE_ENDPOINT}"        # http://127.0.0.1:11436 on Mac Mini
+  model: "dealiq-ce-v4b-mlx"
   timeout: 5.0
   fallback_intent: "general_response"
 
