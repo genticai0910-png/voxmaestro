@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VoxMaestro Agent Config",
+  "type": "object",
+  "required": ["agent", "states"],
+  "properties": {
+    "agent": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"},
+        "description": {"type": "string"},
+        "max_duration_seconds": {"type": "number"},
+        "default_language": {"type": "string"}
+      }
+    },
+    "intent": {
+      "type": "object",
+      "properties": {
+        "provider": {"type": "string"},
+        "endpoint": {"type": "string"},
+        "model": {"type": "string"},
+        "timeout": {"type": "number"},
+        "fallback_intent": {"type": "string"}
+      }
+    },
+    "states": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "phase": {"type": "string"},
+          "prompt": {"type": "string"},
+          "max_turns": {"type": "integer"},
+          "filler": {"type": "string"},
+          "return_to": {"type": "string"},
+          "transitions": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          },
+          "on_enter": {"type": "array"},
+          "tools": {"type": "array"}
+        }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "endpoint": {"type": "string"},
+          "method": {"type": "string"},
+          "timeout": {"type": "number"},
+          "retry": {"type": "integer"},
+          "payload_template": {"type": "object"}
+        }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "properties": {
+        "channels": {"type": "array"},
+        "payload": {"type": "object"}
+      }
+    },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "logging": {"type": "string"},
+        "langfuse": {"type": "object"}
+      }
+    }
+  }
+}

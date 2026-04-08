@@ -1,0 +1,170 @@
+agent:
+  name: "DealiQ RE Agent"
+  version: "1.0.0"
+  description: "Real estate lead qualification agent for DealiQ"
+  max_duration_seconds: 600
+  default_language: "en-US"
+
+intent:
+  provider: "ollama"
+  endpoint: "${VSAI_ENDPOINT}"          # e.g. http://100.122.223.120:11435
+  model: "vsai-intent-v6"
+  timeout: 5.0
+  fallback_intent: "general_response"
+
+states:
+  greeting:
+    phase: "active"
+    prompt: "Hi, this is Alex with DealiQ. I understand you might be interested in selling your property — is that right?"
+    transitions:
+      confirm_sell: "qualification"
+      not_interested: "objection_handling"
+      wrong_number: "graceful_end"
+      general_response: "greeting"
+
+  qualification:
+    phase: "active"
+    prompt: "Great! To make sure we can help you, can you tell me a bit about the property situation — is it currently occupied, and what's the main reason you're looking to sell?"
+    max_turns: 6
+    transitions:
+      motivated_seller: "pricing_discussion"
+      timeline_question: "qualification"
+      condition_question: "qualification"
+      price_question: "qualification"
+      not_interested: "objection_handling"
+      escalate: "live_transfer"
+      general_response: "qualification"
+
+  pricing_discussion:
+    phase: "active"
+    prompt: "Based on what you've shared, we can definitely work with that. We buy properties as-is, so no repairs needed on your end. What price range were you hoping for?"
+    max_turns: 4
+    transitions:
+      price_range_given: "offer_preparation"
+      price_too_high: "objection_handling"
+      needs_time: "follow_up_scheduled"
+      general_response: "pricing_discussion"
+
+  offer_preparation:
+    phase: "active"
+    prompt: "Perfect — let me pull up some comps for your area. This will just take a moment."
+    filler: "Just a moment while I look that up..."
+    tools:
+      - "property_lookup"
+    transitions:
+      tool_complete: "offer_presentation"
+      general_response: "offer_preparation"
+
+  tool_call:
+    phase: "active"
+    prompt: ""
+    return_to: "previous"
+    transitions: {}
+
+  offer_presentation:
+    phase: "active"
+    prompt: "Based on the comparable sales in your area, we'd be looking at making you an all-cash offer. Would you be open to hearing a number?"
+    max_turns: 5
+    transitions:
+      accept_offer: "closing"
+      counter_offer: "negotiation"
+      needs_time: "follow_up_scheduled"
+      not_interested: "objection_handling"
+      general_response: "offer_presentation"
+
+  negotiation:
+    phase: "active"
+    prompt: "I understand you're looking for a bit more. Let me see what I can do. What would make this work for you?"
+    max_turns: 3
+    transitions:
+      accept_offer: "closing"
+      hard_no: "graceful_end"
+      escalate: "live_transfer"
+      general_response: "negotiation"
+
+  objection_handling:
+    phase: "active"
+    prompt: "I completely understand — there's no pressure at all. Can I ask what's holding you back? We might be able to address your concerns."
+    max_turns: 3
+    transitions:
+      re_engage: "qualification"
+      still_not_interested: "graceful_end"
+      escalate: "live_transfer"
+      general_response: "objection_handling"
+
+  closing:
+    phase: "active"
+    prompt: "Excellent! Let's get this moving. I'll have one of our specialists follow up with the formal offer paperwork. What's the best email address for you?"
+    max_turns: 4
+    transitions:
+      email_given: "appointment_setting"
+      no_email: "appointment_setting"
+      general_response: "closing"
+
+  appointment_setting:
+    phase: "active"
+    prompt: "Perfect — what's a good time for a quick 15-minute call to go over the paperwork?"
+    tools:
+      - "schedule_appointment"
+    transitions:
+      appointment_set: "wrap_up"
+      no_availability: "follow_up_scheduled"
+      general_response: "appointment_setting"
+
+  follow_up_scheduled:
+    phase: "active"
+    prompt: "No worries — I'll have someone follow up with you at a better time. Is there a preferred way to reach you?"
+    max_turns: 2
+    transitions:
+      contact_given: "wrap_up"
+      general_response: "wrap_up"
+
+  wrap_up:
+    phase: "active"
+    prompt: "Wonderful — I've got everything I need. You'll hear from our team shortly. Have a great day!"
+    transitions:
+      "*": "graceful_end"
+
+  live_transfer:
+    phase: "active"
+    prompt: "Let me connect you with one of our senior advisors right now."
+    on_enter:
+      - trigger_handoff
+
+  graceful_end:
+    phase: "active"
+    prompt: "Thank you for your time today — we wish you the best!"
+    transitions: {}
+
+tools:
+  property_lookup:
+    endpoint: "${PROP_ENRICHER_URL}/api/lookup"   # prop-enricher on Mac Mini :7700
+    method: "POST"
+    timeout: 10.0
+    retry: 2
+    payload_template:
+      source: "voxmaestro"
+
+  schedule_appointment:
+    endpoint: "${SCHEDULER_WEBHOOK_URL}"           # n8n webhook or external scheduler
+    method: "POST"
+    timeout: 8.0
+    retry: 1
+    payload_template:
+      agent: "dealiq-re"
+
+handoff:
+  channels:
+    - type: "webhook"
+      webhook_url: "${HANDOFF_WEBHOOK_URL}"
+  payload:
+    include_transcript: true
+    include_metadata: true
+
+observability:
+  logging: "INFO"
+  langfuse:
+    enabled: false
+    host: "https://trace.gentic.pro"
+    public_key: "${LANGFUSE_PUBLIC_KEY}"
+    secret_key: "${LANGFUSE_SECRET_KEY}"
