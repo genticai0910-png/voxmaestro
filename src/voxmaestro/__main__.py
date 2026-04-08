@@ -132,6 +132,84 @@ async def cmd_score(args):
     return output
 
 
+async def cmd_stats(args):
+    from voxmaestro import VoxMaestro, CallFunnelAnalyzer
+    from voxmaestro.integrations.bland import BlandTranscriptAdapter
+
+    yaml_path = find_yaml(args.yaml)
+    conductor = VoxMaestro.from_yaml(yaml_path)
+    adapter = BlandTranscriptAdapter(conductor)
+    analyzer = CallFunnelAnalyzer()
+
+    scan_dir = Path(args.dir)
+    if not scan_dir.is_dir():
+        print(f"ERROR: --dir must be a directory, got: {args.dir}", file=sys.stderr)
+        sys.exit(1)
+
+    json_files = sorted(scan_dir.glob("*.json"))
+    if not json_files:
+        print(f"No .json files found in {scan_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Loading {len(json_files)} call file(s) from {scan_dir}...")
+    errors = 0
+    for fpath in json_files:
+        try:
+            payload = json.loads(fpath.read_text())
+            analysis = await adapter.replay(payload)
+            analyzer.ingest_one(analysis)
+        except Exception as e:
+            print(f"  WARN: {fpath.name} skipped — {e}", file=sys.stderr)
+            errors += 1
+
+    report = analyzer.report()
+    print("\n" + "=" * 60)
+    print(f"  VoxMaestro Funnel Report — {report.total_calls} call(s)")
+    print("=" * 60)
+    print(f"  Avg Score:          {report.avg_score}/100")
+    print(f"  Conversion Rate:    {report.conversion_rate * 100:.1f}%")
+    print(f"  Handoff Rate:       {report.handoff_rate * 100:.1f}%")
+    print(f"  Avg Turns:          {report.avg_turns}")
+    if report.avg_duration_seconds is not None:
+        print(f"  Avg Duration:       {report.avg_duration_seconds}s")
+    print(f"\n  Score Distribution:")
+    for bucket, count in report.score_distribution.items():
+        print(f"    {bucket:>8}: {count}")
+    print(f"\n  Tier Distribution:")
+    for tier, count in report.tier_distribution.items():
+        print(f"    {tier:>6}: {count}")
+    print(f"\n  State Reach Rates:")
+    for state, rate in sorted(report.state_reach_rates.items(), key=lambda x: -x[1]):
+        print(f"    {state:<30} {rate * 100:.1f}%")
+    if report.top_exit_intents:
+        print(f"\n  Top Exit Intents:")
+        for intent, count in report.top_exit_intents[:5]:
+            print(f"    {intent:<30} {count}")
+    if errors:
+        print(f"\n  Skipped: {errors} file(s) with errors", file=sys.stderr)
+    print()
+
+
+async def cmd_diagram(args):
+    from voxmaestro import VoxMaestro
+    from voxmaestro.diagram import generate_mermaid, generate_mermaid_html
+
+    yaml_path = find_yaml(args.yaml)
+    conductor = VoxMaestro.from_yaml(yaml_path)
+
+    if args.html:
+        content = generate_mermaid_html(conductor)
+    else:
+        content = generate_mermaid(conductor)
+
+    if args.output:
+        out_path = Path(args.output)
+        out_path.write_text(content)
+        print(f"Written to {out_path}")
+    else:
+        print(content)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="voxmaestro", description="VoxMaestro CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -145,12 +223,25 @@ def main():
     p_score.add_argument("--file", required=True, help="Path to Bland post-call JSON file")
     p_score.add_argument("--yaml", default="", help="Path to agent YAML config")
 
+    p_stats = sub.add_parser("stats", help="Aggregate funnel report from a directory of JSON call files")
+    p_stats.add_argument("--dir", required=True, help="Directory containing .json Bland call files")
+    p_stats.add_argument("--yaml", default="", help="Path to agent YAML config")
+
+    p_diagram = sub.add_parser("diagram", help="Generate Mermaid state diagram from YAML config")
+    p_diagram.add_argument("--yaml", default="", help="Path to agent YAML config")
+    p_diagram.add_argument("--output", default="", help="Write output to this file instead of stdout")
+    p_diagram.add_argument("--html", action="store_true", help="Output full HTML page instead of Mermaid markup")
+
     args = parser.parse_args()
 
     if args.command == "replay":
         asyncio.run(cmd_replay(args))
     elif args.command == "score":
         asyncio.run(cmd_score(args))
+    elif args.command == "stats":
+        asyncio.run(cmd_stats(args))
+    elif args.command == "diagram":
+        asyncio.run(cmd_diagram(args))
 
 
 if __name__ == "__main__":

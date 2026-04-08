@@ -7,6 +7,8 @@ from .conductor import (
 )
 from .integrations.bland import BlandTranscriptAdapter, BlandLiveTurnHandler, CallAnalysis, qualification_score
 from .integrations.irelop import VoxIRELOPEnricher, VoiceSignals
+from .training import TrainingHarvester, TrainingExample
+from .analytics import CallFunnelAnalyzer
 
 __all__ = [
     "VoxMaestro",
@@ -19,5 +21,8 @@ __all__ = [
     "qualification_score",
     "VoxIRELOPEnricher",
     "VoiceSignals",
+    "TrainingHarvester",
+    "TrainingExample",
+    "CallFunnelAnalyzer",
 ]
 __version__ = "0.1.0"
