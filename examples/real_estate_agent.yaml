@@ -1,0 +1,221 @@
+# VoxMaestro — Voice Agent Conductor Schema v0.1.0
+# This file defines the complete behavior of a voice agent conversation.
+# Think docker-compose.yml but for voice agent orchestration.
+
+schema_version: "0.1.0"
+agent:
+  name: "dealiq-qualifier"
+  description: "DealiQ real estate lead qualification agent"
+  language: "en"
+  voice:
+    provider: "piper"              # piper | edge-tts | elevenlabs | custom
+    model: "en_US-amy-medium"
+    speed: 1.0
+    # Fallback chain — if primary TTS fails, cascade
+    fallback:
+      - provider: "edge-tts"
+        model: "en-US-JennyNeural"
+
+# ─── INTENT CLASSIFIER ─────────────────────────────────────────────
+# Maps to your VSAI model — decides WHERE the conversation goes
+intent:
+  provider: "mlx"                  # mlx | ollama | openai | custom
+  endpoint: "http://localhost:11435/v1/chat/completions"
+  model: "vsai-intent-v6"
+  intents:
+    - id: "schedule_appointment"
+      description: "Caller wants to book a showing or meeting"
+      tool: "check_availability"
+    - id: "property_inquiry"
+      description: "Caller asking about a specific property"
+      tool: "property_lookup"
+    - id: "price_question"
+      description: "Caller asking about pricing or valuation"
+      tool: null                   # No tool needed — LLM handles directly
+    - id: "human_request"
+      description: "Caller explicitly asks for a human"
+      trigger: "handoff"
+    - id: "objection"
+      description: "Caller pushes back, stalls, or deflects"
+      trigger: null                # Handled by CE generation model
+    - id: "not_interested"
+      description: "Caller wants to end the conversation"
+      trigger: "graceful_exit"
+    - id: "greeting"
+      description: "Initial hello, small talk"
+      trigger: null
+    - id: "unknown"
+      description: "Intent unclear — ask clarifying question"
+      trigger: null
+
+# ─── GENERATION MODEL ──────────────────────────────────────────────
+# Maps to your CE model — decides WHAT the agent says
+generation:
+  provider: "mlx"
+  endpoint: "http://localhost:11436/v1/chat/completions"
+  model: "dealiq-ce-v4b"
+  system_prompt: |
+    You are a friendly, professional real estate assistant for DealiQ.
+    You qualify leads using the 10-Q framework. Be conversational, not robotic.
+    If the caller is evasive, gently redirect. If emotional, acknowledge first.
+    Never fabricate property details — use tool results only.
+  max_tokens: 150                  # Keep responses short for voice
+  temperature: 0.7
+
+# ─── STATE MACHINE ─────────────────────────────────────────────────
+# Defines valid conversation states and legal transitions
+states:
+  initial:
+    entry_action: "play_greeting"
+    transitions:
+      greeting: "qualification"
+      schedule_appointment: "tool_call"
+      property_inquiry: "tool_call"
+      human_request: "handoff"
+      not_interested: "exit"
+      "*": "qualification"         # Default: start qualifying
+
+  qualification:
+    description: "10-Q lead qualification flow"
+    max_turns: 15                  # Safety valve — don't loop forever
+    transitions:
+      schedule_appointment: "tool_call"
+      property_inquiry: "tool_call"
+      price_question: "generation"  # CE handles directly
+      human_request: "handoff"
+      not_interested: "exit"
+      objection: "objection_handling"
+      "*": "qualification"         # Stay in qualification by default
+    scoring:
+      engine: "irelop"
+      hot_threshold: 80
+      warm_threshold: 60
+      on_hot: "offer_appointment"  # Sub-state triggered when score >= 80
+      on_warm: "continue"
+      on_cool: "nurture_pivot"
+
+  objection_handling:
+    description: "Evasive or resistant caller"
+    max_turns: 3                   # Don't push too hard
+    transitions:
+      schedule_appointment: "tool_call"
+      not_interested: "exit"
+      "*": "qualification"         # Return to qualification after handling
+    escalation:
+      after_max_turns: "handoff"   # If 3 objections in a row → human
+
+  tool_call:
+    description: "Mid-turn async tool execution"
+    # This is a transient state — enters, fires tool, returns
+    return_to: "previous"          # Go back to whatever state triggered this
+    timeout_ms: 3000               # Max wait for tool response
+    on_timeout: "apologize_retry"
+
+  handoff:
+    description: "Transfer to human agent"
+    # Three-phase protocol
+    phases:
+      decision:
+        log: true
+        capture_reason: true
+      bridge:
+        filler: "Let me connect you with one of our specialists who can help you with that."
+        action: "fire_context_payload"
+      teardown:
+        save_transcript: true
+        save_irelop_score: true
+        save_to: "training_data"
+
+  exit:
+    description: "Graceful conversation end"
+    farewell_message: "Thanks for calling! We'll follow up with any info we discussed. Have a great day."
+    actions:
+      - "save_transcript"
+      - "update_crm"
+      - "trigger_drip_sequence"
+
+# ─── TOOL BRIDGE ───────────────────────────────────────────────────
+# Mid-turn async tool definitions with filler audio mappings
+tools:
+  check_availability:
+    endpoint: "http://localhost:8765/api/availability"
+    method: "POST"
+    timeout_ms: 2000
+    # Filler plays IMMEDIATELY when this tool fires — pre-LLM gate
+    filler:
+      text: "Let me check what we have available for you."
+      audio: "fillers/checking_availability.wav"  # Pre-rendered for zero latency
+    params_from_context:
+      - "requested_date"
+      - "requested_time"
+      - "property_type"
+    on_success: "inject_result"    # Feed result to CE for response generation
+    on_failure:
+      message: "I'm having trouble checking our calendar right now. Can I take your info and have someone call you back?"
+      trigger: "handoff"
+
+  property_lookup:
+    endpoint: "http://localhost:7700/api/property"
+    method: "GET"
+    timeout_ms: 2500
+    filler:
+      text: "Let me pull up those details for you."
+      audio: "fillers/pulling_details.wav"
+    params_from_context:
+      - "property_address"
+      - "mls_number"
+    on_success: "inject_result"
+    on_failure:
+      message: "I don't have that listing in front of me, but I can connect you with someone who does."
+      trigger: "handoff"
+
+# ─── HANDOFF PAYLOAD ───────────────────────────────────────────────
+# What gets sent to the human agent during transfer
+handoff:
+  delivery:
+    - channel: "webhook"
+      url: "${HANDOFF_WEBHOOK_URL}"
+      method: "POST"
+    - channel: "slack"
+      webhook: "${SLACK_WEBHOOK_URL}"
+  payload:
+    - "caller_phone"
+    - "irelop_score"
+    - "irelop_breakdown"           # Motivation/Opportunity/Profile scores
+    - "intent_history"
+    - "qualification_progress"     # Which of the 10-Q were answered
+    - "conversation_summary"       # LLM-generated 2-sentence summary
+    - "handoff_reason"
+    - "caller_sentiment"
+    - "call_duration_seconds"
+    - "transcript_url"
+
+# ─── GUARDRAILS ────────────────────────────────────────────────────
+guardrails:
+  max_call_duration_seconds: 600   # 10 min hard cap
+  max_consecutive_silence_ms: 5000 # If 5s silence, prompt caller
+  silence_prompt: "Are you still there?"
+  barge_in:
+    enabled: true
+    action: "cancel_tts_resume_stt"  # Kill outbound audio, keep listening
+  profanity:
+    action: "acknowledge_redirect"   # Don't hang up, redirect gracefully
+  pii_logging:
+    redact: ["ssn", "credit_card", "dob"]
+    allow: ["phone", "email", "name", "address"]
+
+# ─── OBSERVABILITY ─────────────────────────────────────────────────
+observability:
+  logging:
+    provider: "langfuse"
+    endpoint: "${LANGFUSE_URL}"
+    level: "info"
+    trace_id_format: "vox-{agent_name}-{call_id}"
+  metrics:
+    - "call_duration"
+    - "turns_to_qualification"
+    - "tool_call_latency_ms"
+    - "intent_confidence"
+    - "irelop_score_final"
+    - "handoff_rate"
+    - "barge_in_count"

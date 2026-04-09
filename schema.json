@@ -1,0 +1,203 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://voxmaestro.dev/schema/v0.1.0",
+  "title": "VoxMaestro Voice Agent Schema",
+  "description": "Configuration schema for VoxMaestro voice agent conductor",
+  "type": "object",
+  "required": ["schema_version", "agent", "intent", "generation", "states"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "agent": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "language": { "type": "string", "default": "en" },
+        "voice": {
+          "type": "object",
+          "required": ["provider", "model"],
+          "properties": {
+            "provider": { "type": "string", "enum": ["piper", "edge-tts", "elevenlabs", "openai", "custom"] },
+            "model": { "type": "string" },
+            "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
+            "fallback": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["provider", "model"],
+                "properties": {
+                  "provider": { "type": "string" },
+                  "model": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "required": ["provider", "model", "intents"],
+      "properties": {
+        "provider": { "type": "string" },
+        "endpoint": { "type": "string", "format": "uri" },
+        "model": { "type": "string" },
+        "intents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "description"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z_]+$" },
+              "description": { "type": "string" },
+              "tool": { "type": ["string", "null"] },
+              "trigger": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "generation": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": { "type": "string" },
+        "endpoint": { "type": "string", "format": "uri" },
+        "model": { "type": "string" },
+        "system_prompt": { "type": "string" },
+        "max_tokens": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 }
+      }
+    },
+    "states": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "entry_action": { "type": "string" },
+          "max_turns": { "type": "integer", "minimum": 1 },
+          "transitions": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "return_to": { "type": "string" },
+          "timeout_ms": { "type": "integer", "minimum": 100 },
+          "scoring": {
+            "type": "object",
+            "properties": {
+              "engine": { "type": "string" },
+              "hot_threshold": { "type": "integer" },
+              "warm_threshold": { "type": "integer" },
+              "on_hot": { "type": "string" },
+              "on_warm": { "type": "string" },
+              "on_cool": { "type": "string" }
+            }
+          },
+          "phases": {
+            "type": "object",
+            "properties": {
+              "decision": { "type": "object" },
+              "bridge": { "type": "object" },
+              "teardown": { "type": "object" }
+            }
+          },
+          "escalation": { "type": "object" },
+          "actions": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["endpoint", "method"],
+        "properties": {
+          "endpoint": { "type": "string" },
+          "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH"] },
+          "timeout_ms": { "type": "integer", "minimum": 100 },
+          "filler": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string" },
+              "audio": { "type": "string" }
+            }
+          },
+          "params_from_context": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "on_success": { "type": "string" },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "message": { "type": "string" },
+              "trigger": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "properties": {
+        "delivery": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["channel"],
+            "properties": {
+              "channel": { "type": "string" },
+              "url": { "type": "string" },
+              "webhook": { "type": "string" },
+              "method": { "type": "string" }
+            }
+          }
+        },
+        "payload": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "guardrails": {
+      "type": "object",
+      "properties": {
+        "max_call_duration_seconds": { "type": "integer" },
+        "max_consecutive_silence_ms": { "type": "integer" },
+        "silence_prompt": { "type": "string" },
+        "barge_in": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "action": { "type": "string" }
+          }
+        },
+        "pii_logging": {
+          "type": "object",
+          "properties": {
+            "redact": { "type": "array", "items": { "type": "string" } },
+            "allow": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "logging": { "type": "object" },
+        "metrics": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
